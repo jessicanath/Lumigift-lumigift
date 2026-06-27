@@ -3,7 +3,7 @@ coverage:
     project:
       default:
         target: 70%
-        threshold: 1%   # allow up to 1% drop before failing
+        threshold: 1% # allow up to 1% drop before failing
     patch:
       default:
         target: 70%

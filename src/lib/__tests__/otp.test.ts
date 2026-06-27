@@ -27,12 +27,10 @@ import { getRedisClient } from "@/lib/redis";
 beforeAll(() => {
   (getRedisClient as jest.Mock).mockResolvedValue(redisMock);
 
-  redisMock.set.mockImplementation(
-    async (key: string, value: string, opts?: { EX?: number }) => {
-      const expiresAt = opts?.EX ? Date.now() + opts.EX * 1000 : Infinity;
-      store.set(key, { value, expiresAt });
-    }
-  );
+  redisMock.set.mockImplementation(async (key: string, value: string, opts?: { EX?: number }) => {
+    const expiresAt = opts?.EX ? Date.now() + opts.EX * 1000 : Infinity;
+    store.set(key, { value, expiresAt });
+  });
 
   redisMock.get.mockImplementation(async (key: string) => {
     const entry = store.get(key);
@@ -90,11 +88,7 @@ describe("storeOtp", () => {
   it("stores the OTP in Redis with a 600-second TTL", async () => {
     await storeOtp(PHONE, VALID_OTP);
 
-    expect(redisMock.set).toHaveBeenCalledWith(
-      `otp:${PHONE}`,
-      VALID_OTP,
-      { EX: 600 }
-    );
+    expect(redisMock.set).toHaveBeenCalledWith(`otp:${PHONE}`, VALID_OTP, { EX: 600 });
   });
 
   it("resets the attempts counter when a new OTP is stored", async () => {
@@ -164,7 +158,7 @@ describe("verifyOtp — expired OTP", () => {
   });
 });
 
-describe("verifyOtp — rate limiting", () => {
+describe("verifyOtp — rate limiting (per-token)", () => {
   it("locks the account after MAX_ATTEMPTS (5) failed attempts", async () => {
     await seedOtp();
 
@@ -195,5 +189,78 @@ describe("verifyOtp — rate limiting", () => {
 
     const result = await verifyOtp(PHONE, VALID_OTP);
     expect(result.success).toBe(false);
+  });
+});
+
+describe("verifyOtp — account-level lock (3 consecutive session failures)", () => {
+  async function exhaustOtpSession(phone = PHONE) {
+    await seedOtp(phone);
+    for (let i = 0; i < 5; i++) {
+      await verifyOtp(phone, "000000");
+    }
+  }
+
+  it("does not lock after 1 exhausted session", async () => {
+    await exhaustOtpSession();
+    await seedOtp();
+    const result = await verifyOtp(PHONE, VALID_OTP);
+    expect(result.success).toBe(true);
+  });
+
+  it("does not lock after 2 exhausted sessions", async () => {
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+    await seedOtp();
+    const result = await verifyOtp(PHONE, VALID_OTP);
+    expect(result.success).toBe(true);
+  });
+
+  it("locks the account after 3 consecutive exhausted sessions", async () => {
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+
+    await seedOtp();
+    const result = await verifyOtp(PHONE, VALID_OTP);
+    expect(result).toMatchObject({ success: false, locked: true });
+    expect((result as { message: string }).message).toMatch(/temporarily locked/i);
+  });
+
+  it("includes retryAfter on account lock", async () => {
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+
+    await seedOtp();
+    const result = await verifyOtp(PHONE, VALID_OTP);
+    expect(result.success).toBe(false);
+    expect((result as { retryAfter?: number }).retryAfter).toBeGreaterThan(0);
+  });
+
+  it("returns locked:true immediately on subsequent attempts while locked", async () => {
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+
+    await seedOtp();
+    await verifyOtp(PHONE, VALID_OTP);
+    const second = await verifyOtp(PHONE, VALID_OTP);
+    expect(second).toMatchObject({ success: false, locked: true });
+  });
+
+  it("resets session-failure counter on successful verification", async () => {
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+
+    // Successful verification resets the counter
+    await seedOtp();
+    await verifyOtp(PHONE, VALID_OTP);
+
+    // Two more exhausted sessions should NOT lock (counter was reset)
+    await exhaustOtpSession();
+    await exhaustOtpSession();
+    await seedOtp();
+    const result = await verifyOtp(PHONE, VALID_OTP);
+    expect(result.success).toBe(true);
   });
 });

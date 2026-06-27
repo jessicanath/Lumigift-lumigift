@@ -86,3 +86,24 @@ export async function sendGiftInvitation(
     api_key: serverConfig.termii.apiKey,
   });
 }
+
+/**
+ * Notifies the sender via SMS that their unclaimed gift has expired.
+ *
+ * @param phone - E.164-formatted sender phone number.
+ * @param amountUsdc - The USDC amount that was refunded.
+ * @returns Resolves when the SMS has been dispatched.
+ */
+export async function sendGiftExpiredAlert(
+  phone: string,
+  amountUsdc: string
+): Promise<void> {
+  await termiiClient.post("/sms/send", {
+    to: phone,
+    from: serverConfig.termii.senderId,
+    sms: `Lumigift: Your gift of ${amountUsdc} USDC was unclaimed and has been refunded to your wallet.`,
+    type: "plain",
+    channel: "generic",
+    api_key: serverConfig.termii.apiKey,
+  });
+}

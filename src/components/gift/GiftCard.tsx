@@ -8,6 +8,7 @@ import { GiftStatusBadge } from "@/components/ui/GiftStatusBadge";
 import { formatNGN } from "@/lib/currency";
 import { ClaimButton } from "./ClaimButton";
 import { ShareGift } from "./ShareGift";
+import { CancelGiftModal } from "./CancelGiftModal";
 import styles from "./GiftCard.module.css";
 
 interface GiftCardProps {
@@ -26,9 +27,9 @@ function explorerUrl(txHash: string) {
 export function GiftCard({ gift, perspective, recipientStellarKey }: GiftCardProps) {
   const router = useRouter();
   const [status, setStatus] = useState<GiftStatus>(gift.status);
+  const [showCancelModal, setShowCancelModal] = useState(false);
   const isLocked = status === "locked";
-  const name =
-    perspective === "sender" ? `To: ${gift.recipientName}` : "A gift for you";
+  const name = perspective === "sender" ? `To: ${gift.recipientName}` : "A gift for you";
 
   const amountLabel =
     isLocked && perspective === "recipient" ? "amount hidden" : formatNGN(gift.amountNgn);
@@ -38,12 +39,7 @@ export function GiftCard({ gift, perspective, recipientStellarKey }: GiftCardPro
     "MMM d, yyyy 'at' h:mm a"
   )}`;
 
-  const cardLabel = [
-    name,
-    amountLabel,
-    unlockLabel,
-    status,
-  ].join(", ");
+  const cardLabel = [name, amountLabel, unlockLabel, status].join(", ");
 
   const handleActivate = () => {
     router.push(`/gifts/${gift.id}`);
@@ -82,18 +78,19 @@ export function GiftCard({ gift, perspective, recipientStellarKey }: GiftCardPro
         <span>{unlockLabel}</span>
       </div>
 
-      {gift.message && !isLocked && (
-        <p className={styles.message}>{gift.message}</p>
+      {gift.message && !isLocked && <p className={styles.message}>{gift.message}</p>}
+
+      {gift.voiceNoteUrl && !isLocked && (
+        <div className={styles.voiceNote}>
+          <span className={styles.voiceNoteLabel}>Voice note</span>
+          <audio src={gift.voiceNoteUrl} controls className={styles.voiceNotePlayer} aria-label="Gift voice note" />
+        </div>
       )}
 
       {gift.stellarTxHash && (
         <div className={styles.meta}>
           <span>Funding tx: </span>
-          <a
-            href={explorerUrl(gift.stellarTxHash)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href={explorerUrl(gift.stellarTxHash)} target="_blank" rel="noopener noreferrer">
             {gift.stellarTxHash.slice(0, 8)}…
           </a>
         </div>
@@ -102,11 +99,7 @@ export function GiftCard({ gift, perspective, recipientStellarKey }: GiftCardPro
       {gift.claimTxHash && (
         <div className={styles.meta}>
           <span>Claim tx: </span>
-          <a
-            href={explorerUrl(gift.claimTxHash)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <a href={explorerUrl(gift.claimTxHash)} target="_blank" rel="noopener noreferrer">
             {gift.claimTxHash.slice(0, 8)}…
           </a>
         </div>
@@ -123,8 +116,35 @@ export function GiftCard({ gift, perspective, recipientStellarKey }: GiftCardPro
       )}
 
       {perspective === "sender" && (status === "locked" || status === "funded") && (
-        <div onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        <div
+          className={styles.actions}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
           <ShareGift giftId={gift.id} recipientName={gift.recipientName} />
+          <button
+            className="btn btn--secondary btn--sm"
+            onClick={() => setShowCancelModal(true)}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {perspective === "sender" && (
+        <div
+          className={styles.meta}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
+          <a
+            href={`/api/v1/gifts/${gift.id}/receipt`}
+            download={`lumigift-receipt-${gift.id}.pdf`}
+            className="btn btn--ghost btn--sm"
+            aria-label="Download PDF receipt"
+          >
+            ↓ Receipt
+          </a>
         </div>
       )}
     </article>

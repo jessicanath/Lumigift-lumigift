@@ -11,14 +11,33 @@ import { serverConfig } from "@/server/config";
 import { logger } from "@/lib/logger";
 import type { StellarAccount, StellarBalance } from "@/types";
 
-const server = new Horizon.Server(serverConfig.stellar.horizonUrl);
+let serverInstance: Horizon.Server | null = null;
 
-const USDC = new Asset(serverConfig.usdc.assetCode, serverConfig.usdc.issuer);
+/**
+ * Returns a shared Horizon.Server instance.
+ * Instantiated lazily to avoid build-time errors when horizonUrl is empty.
+ */
+export function getHorizonServer(): Horizon.Server {
+  if (!serverInstance) {
+    serverInstance = new Horizon.Server(serverConfig.stellar.horizonUrl);
+  }
+  return serverInstance;
+}
+
+let usdcInstance: Asset | null = null;
+
+/**
+ * Returns a shared USDC Asset instance.
+ */
+export function getUsdcAsset(): Asset {
+  if (!usdcInstance) {
+    usdcInstance = new Asset(serverConfig.usdc.assetCode, serverConfig.usdc.issuer);
+  }
+  return usdcInstance;
+}
 
 const networkPassphrase =
-  serverConfig.stellar.network === "mainnet"
-    ? Networks.PUBLIC
-    : Networks.TESTNET;
+  serverConfig.stellar.network === "mainnet" ? Networks.PUBLIC : Networks.TESTNET;
 
 /**
  * Derives and returns the server's Stellar public key from the configured secret.
@@ -27,10 +46,7 @@ const networkPassphrase =
 export function getServerPublicKey(): string {
   const keypair = Keypair.fromSecret(serverConfig.stellar.serverSecretKey);
   const publicKey = keypair.publicKey();
-  logger.info(
-    { event: "stellar_key_loaded", publicKey },
-    "Stellar server signing key loaded"
-  );
+  logger.info({ event: "stellar_key_loaded", publicKey }, "Stellar server signing key loaded");
   return publicKey;
 }
 
@@ -68,6 +84,7 @@ export function auditLogKeyRotation(
  *   if the account does not exist on the network.
  */
 export async function loadAccount(publicKey: string): Promise<StellarAccount> {
+  const server = getHorizonServer();
   const account = await server.loadAccount(publicKey);
   const balances: StellarBalance[] = account.balances.map((b) => ({
     assetCode: b.asset_type === "native" ? "XLM" : (b as { asset_code: string }).asset_code,
@@ -88,8 +105,9 @@ export async function loadAccount(publicKey: string): Promise<StellarAccount> {
 export async function getUsdcBalance(publicKey: string): Promise<string> {
   try {
     const account = await loadAccount(publicKey);
+    const usdcAsset = getUsdcAsset();
     const usdcBalance = account.balances.find(
-      (b) => b.assetCode === serverConfig.usdc.assetCode
+      (b) => b.assetCode === usdcAsset.code && b.assetIssuer === usdcAsset.issuer
     );
     return usdcBalance?.balance ?? "0";
   } catch {
@@ -109,6 +127,7 @@ export async function sendUsdcPayment(
   destinationPublicKey: string,
   amount: string
 ): Promise<string> {
+  const server = getHorizonServer();
   const serverKeypair = Keypair.fromSecret(serverConfig.stellar.serverSecretKey);
   const sourceAccount = await server.loadAccount(serverKeypair.publicKey());
 
@@ -119,7 +138,7 @@ export async function sendUsdcPayment(
     .addOperation(
       Operation.payment({
         destination: destinationPublicKey,
-        asset: USDC,
+        asset: getUsdcAsset(),
         amount,
       })
     )
@@ -132,6 +151,40 @@ export async function sendUsdcPayment(
 }
 
 /**
+ * Validates that a Stellar public key is well-formed AND corresponds to a
+ * funded account on the network (i.e. it has been activated with a minimum
+ * XLM balance). Call this before locking funds in the escrow contract to
+ * prevent gifts being sent to non-existent accounts.
+ *
+ * @param publicKey - The Stellar public key (G…) to validate.
+ * @returns `{ valid: true }` if the account exists and is funded, or
+ *   `{ valid: false, reason: string }` describing why it failed.
+ */
+export async function validateStellarAccount(
+  publicKey: string
+): Promise<{ valid: true } | { valid: false; reason: string }> {
+  // 1. Structural check — normalized Stellar public keys must be valid.
+  try {
+    Keypair.fromPublicKey(publicKey);
+  } catch {
+    return { valid: false, reason: "Invalid Stellar public key format" };
+  }
+
+  try {
+    const server = getHorizonServer();
+    await server.loadAccount(publicKey);
+    return { valid: true };
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404) {
+      return { valid: false, reason: "Stellar account does not exist or is not funded" };
+    }
+    // Network error — propagate so callers can retry
+    throw err;
+  }
+}
+
+/**
  * Establishes a USDC trustline for the account identified by `secretKey`.
  * Must be called before the account can hold or receive USDC.
  *
@@ -141,6 +194,7 @@ export async function sendUsdcPayment(
  *   transaction fails.
  */
 export async function establishUsdcTrustline(secretKey: string): Promise<string> {
+  const server = getHorizonServer();
   const keypair = Keypair.fromSecret(secretKey);
   const account = await server.loadAccount(keypair.publicKey());
 
@@ -148,7 +202,7 @@ export async function establishUsdcTrustline(secretKey: string): Promise<string>
     fee: BASE_FEE,
     networkPassphrase,
   })
-    .addOperation(Operation.changeTrust({ asset: USDC }))
+    .addOperation(Operation.changeTrust({ asset: getUsdcAsset() }))
     .setTimeout(30)
     .build();
 
@@ -157,4 +211,4 @@ export async function establishUsdcTrustline(secretKey: string): Promise<string>
   return result.hash;
 }
 
-export { server as horizonServer, USDC, networkPassphrase };
+export { getHorizonServer as horizonServer, getUsdcAsset as USDC, networkPassphrase };

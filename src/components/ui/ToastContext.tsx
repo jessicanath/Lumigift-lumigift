@@ -12,8 +12,8 @@ export interface Toast {
 
 interface ToastContextValue {
   toasts: Toast[];
-  addToast: (message: string, variant?: ToastVariant) => void;
-  removeToast: (id: string) => void;
+  addToast: (_message: string, _variant?: ToastVariant) => void;
+  removeToast: (_id: string) => void;
 }
 
 const ToastContext = createContext<ToastContextValue | null>(null);
@@ -38,7 +38,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
         const next = [...prev, { id, message, variant }];
         return next.length > MAX_TOASTS ? next.slice(next.length - MAX_TOASTS) : next;
       });
-      timers.current.set(id, setTimeout(() => removeToast(id), AUTO_DISMISS_MS));
+      timers.current.set(
+        id,
+        setTimeout(() => removeToast(id), AUTO_DISMISS_MS)
+      );
     },
     [removeToast]
   );

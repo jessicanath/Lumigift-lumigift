@@ -63,11 +63,25 @@ export function useCsrf() {
 
       // If the server rejects the token, invalidate and surface the error
       if (res.status === 403) {
-        const body = await res.clone().json().catch(() => ({}));
+        const body = await res
+          .clone()
+          .json()
+          .catch(() => ({}));
         if (body?.code === "CSRF_INVALID" || body?.code === "CSRF_MISSING") {
           invalidateCsrfToken();
           tokenRef.current = null;
         }
+      }
+
+      // If the token expired (401), invalidate and retry once with a fresh token
+      if (res.status === 401) {
+        invalidateCsrfToken();
+        tokenRef.current = null;
+        const freshToken = await fetchCsrfToken();
+        tokenRef.current = freshToken;
+        const retryHeaders = new Headers(init.headers);
+        retryHeaders.set("x-csrf-token", freshToken);
+        return fetch(input, { ...init, headers: retryHeaders, credentials: "same-origin" });
       }
 
       return res;

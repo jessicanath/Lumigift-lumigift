@@ -1,4 +1,54 @@
-import { sanitizeMessage, stripHtmlTags } from "../sanitize";
+import { sanitizeMessage, stripHtmlTags, sanitizeObject } from "../sanitize";
+
+describe("sanitizeObject", () => {
+  it("should handle null and undefined", () => {
+    expect(sanitizeObject(null)).toBeNull();
+    expect(sanitizeObject(undefined)).toBeUndefined();
+  });
+
+  it("should sanitize strings in an object", () => {
+    const input = {
+      name: "  <b>John Doe</b>  ",
+      message: "Hello \u0041\u030a", // A + combining ring (NFD)
+    };
+    const expected = {
+      name: "John Doe",
+      message: "Hello \u00c5", // Å (NFC)
+    };
+    expect(sanitizeObject(input)).toEqual(expected);
+  });
+
+  it("should sanitize strings in an array", () => {
+    const input = ["  <script>alert(1)</script>  ", "  Normal Text  "];
+    const expected = ["", "Normal Text"];
+    expect(sanitizeObject(input)).toEqual(expected);
+  });
+
+  it("should handle nested objects", () => {
+    const input = {
+      user: {
+        bio: "  <i>I am a developer</i>  ",
+      },
+      tags: [" <b>test</b> "],
+    };
+    const expected = {
+      user: {
+        bio: "I am a developer",
+      },
+      tags: ["test"],
+    };
+    expect(sanitizeObject(input)).toEqual(expected);
+  });
+
+  it("should ignore non-string values", () => {
+    const input = {
+      age: 25,
+      active: true,
+      data: null,
+    };
+    expect(sanitizeObject(input)).toEqual(input);
+  });
+});
 
 describe("sanitizeMessage", () => {
   it("should return undefined for undefined input", () => {
@@ -80,9 +130,7 @@ describe("stripHtmlTags", () => {
   });
 
   it("should handle attributes in tags", () => {
-    expect(
-      stripHtmlTags('<a href="https://example.com" onclick="evil()">Link</a>')
-    ).toBe("Link");
+    expect(stripHtmlTags('<a href="https://example.com" onclick="evil()">Link</a>')).toBe("Link");
   });
 
   it("should preserve plain text", () => {

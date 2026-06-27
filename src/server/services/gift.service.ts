@@ -1,4 +1,6 @@
-import { randomUUID, createHash } from "crypto";
+import { randomUUID } from "crypto";
+import { hashPhone, detectPhoneHashCollision } from "@/lib/phone";
+import { serviceLogger } from "@/lib/logger";
 import pool from "@/lib/db";
 import type { Gift, GiftStatus } from "@/types";
 import type { CreateGiftInput } from "@/types/schemas";
@@ -8,8 +10,10 @@ import { serverConfig } from "@/server/config";
 import { assertValidTransition } from "./gift-state-machine";
 import { createGiftInvitation } from "./invitation.service";
 import { sendGiftInvitation } from "@/lib/sms";
+import { sendGiftReceivedEmail } from "@/lib/email";
 import { stripHtmlTags } from "@/lib/sanitize";
 import { createAuditLog } from "./audit.service";
+import { checkGiftForFraud, createFraudFlag } from "./fraud.service";
 
 // ─── Exchange rate helper ─────────────────────────────────────────────────────
 import { getExchangeRate, lockExchangeRate } from "@/server/services/exchange-rate.service";
@@ -26,10 +30,6 @@ export async function ngnToUsdc(ngn: number): Promise<string> {
   return (ngn / ngnPerUsdc).toFixed(7);
 }
 
-/** Hash a phone number for storage. Plaintext is never persisted. */
-export function hashPhone(phone: string): string {
-  return createHash("sha256").update(phone).digest("hex");
-}
 
 // ─── In-memory store (replace with DB in production) ─────────────────────────
 export const gifts = new Map<string, Gift>();
@@ -52,7 +52,8 @@ export const gifts = new Map<string, Gift>();
 export async function createGift(
   senderId: string,
   input: CreateGiftInput,
-  recipientIsRegistered: boolean = true
+  recipientIsRegistered: boolean = true,
+  senderCreatedAt?: Date
 ): Promise<{ gift: Gift; paymentUrl: string }> {
   // ── Daily sending limit check ──────────────────────────────────────────────
   const { dailyLimitNgn } = serverConfig.giftLimits;
@@ -69,6 +70,15 @@ export async function createGift(
   const amountUsdc = await ngnToUsdc(input.amountNgn);
   const recipientPhoneHash = hashPhone(input.recipientPhone);
 
+  // ── Phone hash collision detection ─────────────────────────────────────────
+  const log = serviceLogger("gift");
+  try {
+    await detectPhoneHashCollision(recipientPhoneHash, pool);
+  } catch (err) {
+    log.error({ err, recipientPhoneHash: recipientPhoneHash.slice(0, 8) }, "Phone hash collision detected — gift rejected");
+    throw err;
+  }
+
   // Sanitize message content to prevent stored XSS
   const sanitizedMessage = input.message ? stripHtmlTags(input.message) : undefined;
 
@@ -81,13 +91,47 @@ export async function createGift(
     amountNgn: input.amountNgn,
     amountUsdc,
     message: sanitizedMessage,
+    voiceNoteUrl: input.voiceNoteUrl,
     unlockAt: new Date(input.unlockAt),
     status: "pending_payment",
+    occasion: input.occasion ?? "general",
+    notifyAt: input.notifyAt ? new Date(input.notifyAt) : undefined,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
 
   gifts.set(id, gift);
+
+  // ── Fraud detection check ──────────────────────────────────────────────────
+  const userCreatedAt = senderCreatedAt ?? new Date(0); // fallback: treat as old account
+  const fraudCheck = await checkGiftForFraud(
+    senderId,
+    input.recipientPhone,
+    input.amountNgn,
+    userCreatedAt
+  );
+
+  if (fraudCheck.flagged) {
+    // Flag the gift for review — do NOT auto-process
+    for (const reason of fraudCheck.reasons) {
+      await createFraudFlag(
+        id,
+        senderId,
+        "automated_rule",
+        reason,
+        fraudCheck.severity,
+        {
+          amountNgn: input.amountNgn,
+          recipientName: input.recipientName,
+          rules: fraudCheck.reasons,
+        }
+      );
+    }
+
+    // Update gift status to indicate it's under review
+    gift.status = "pending_payment"; // held — not auto-processed
+    gifts.set(id, gift);
+  }
 
   // Lock the exchange rate for slippage protection (expires in 5 minutes)
   await lockExchangeRate(id);
@@ -146,7 +190,7 @@ export async function createGift(
     sendGiftReceivedEmail(input.recipientEmail, {
       recipientName: input.recipientName,
       unlockAt: new Date(input.unlockAt),
-    }).catch((err) => console.error("[email] gift_received failed:", err));
+    }).catch((err: unknown) => console.error("[email] gift_received failed:", err));
   }
 
   return { gift, paymentUrl: payment.authorizationUrl };
@@ -159,7 +203,9 @@ export async function createGift(
  * @returns The {@link Gift} if found, or `null` if it does not exist.
  */
 export async function getGiftById(id: string): Promise<Gift | null> {
-  return gifts.get(id) ?? null;
+  const gift = gifts.get(id);
+  if (!gift || gift.deletedAt) return null;
+  return gift;
 }
 
 /**
@@ -180,9 +226,14 @@ export async function updateGiftStatus(id: string, status: GiftStatus): Promise<
   gifts.set(id, gift);
 
   // Create audit log for status change
-  const eventType = status === "funded" ? "gift_funded" as const : 
-                    status === "claimed" ? "gift_claimed" as const :
-                    status === "cancelled" ? "gift_cancelled" as const : null;
+  const eventType =
+    status === "funded"
+      ? ("gift_funded" as const)
+      : status === "claimed"
+        ? ("gift_claimed" as const)
+        : status === "cancelled"
+          ? ("gift_cancelled" as const)
+          : null;
 
   if (eventType) {
     await createAuditLog({
@@ -208,7 +259,7 @@ export async function updateGiftStatus(id: string, status: GiftStatus): Promise<
  * @returns An array of {@link Gift} objects, possibly empty.
  */
 export async function getGiftsBySender(senderId: string): Promise<Gift[]> {
-  return [...gifts.values()].filter((g) => g.senderId === senderId);
+  return [...gifts.values()].filter((g) => g.senderId === senderId && !g.deletedAt);
 }
 
 /** Paginated result for {@link getGiftsBySenderPaginated}. */
@@ -225,6 +276,12 @@ export interface GiftPageOffset {
   page: number;
   limit: number;
   totalPages: number;
+  counts: {
+    all: number;
+    pending: number;
+    claimed: number;
+    expired: number;
+  };
 }
 
 /**
@@ -243,7 +300,7 @@ export async function getGiftsBySenderPaginated(
   limit: number
 ): Promise<GiftPage> {
   const all = [...gifts.values()]
-    .filter((g) => g.senderId === senderId)
+    .filter((g) => g.senderId === senderId && !g.deletedAt)
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   const startIndex = cursor ? all.findIndex((g) => g.id === cursor) + 1 : 0;
@@ -260,25 +317,46 @@ export async function getGiftsBySenderPaginated(
  * @param senderId - The authenticated user's ID.
  * @param page - 1-based page number (default 1).
  * @param limit - Items per page, max 100 (default 10).
+ * @param status - Optional status to filter by.
  * @returns A {@link GiftPageOffset} with data, total, page, limit, totalPages.
  */
 export async function getGiftsBySenderPage(
   senderId: string,
   page: number,
-  limit: number
+  limit: number,
+  status?: GiftStatus
 ): Promise<GiftPageOffset> {
   const safePage = Math.max(1, page);
   const safeLimit = Math.min(100, Math.max(1, limit));
-  const all = [...gifts.values()]
-    .filter((g) => g.senderId === senderId)
-    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const allGifts = [...gifts.values()].filter((g) => g.senderId === senderId && !g.deletedAt);
+
+  const counts = {
+    all: allGifts.length,
+    pending: allGifts.filter((g) =>
+      ["pending_payment", "funded", "locked", "scheduled", "unlocked"].includes(g.status)
+    ).length,
+    claimed: allGifts.filter((g) => g.status === "claimed").length,
+    expired: allGifts.filter((g) => g.status === "expired").length,
+  };
+
+  let filtered = allGifts.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+  if (status && status !== ("all" as any)) {
+    if (status === ("pending" as any)) {
+      filtered = filtered.filter((g) =>
+        ["pending_payment", "funded", "locked", "scheduled", "unlocked"].includes(g.status)
+      );
+    } else {
+      filtered = filtered.filter((g) => g.status === status);
+    }
+  }
 
   const offset = (safePage - 1) * safeLimit;
-  const data = all.slice(offset, offset + safeLimit);
-  const total = all.length;
+  const data = filtered.slice(offset, offset + safeLimit);
+  const total = filtered.length;
   const totalPages = Math.ceil(total / safeLimit) || 1;
 
-  return { data, total, page: safePage, limit: safeLimit, totalPages };
+  return { data, total, page: safePage, limit: safeLimit, totalPages, counts };
 }
 
 /**
@@ -289,7 +367,7 @@ export async function getGiftsBySenderPage(
  */
 export async function getGiftsByRecipient(phone: string): Promise<Gift[]> {
   const hash = hashPhone(phone);
-  return [...gifts.values()].filter((g) => g.recipientPhoneHash === hash);
+  return [...gifts.values()].filter((g) => g.recipientPhoneHash === hash && !g.deletedAt);
 }
 
 /**
@@ -366,5 +444,62 @@ export async function updateGiftStatusIdempotent(
 }
 
 export async function getGiftsByStatus(status: GiftStatus): Promise<Gift[]> {
-  return [...gifts.values()].filter((g) => g.status === status);
+  return [...gifts.values()].filter((g) => g.status === status && !g.deletedAt);
+}
+
+export async function getAllGifts(): Promise<Gift[]> {
+  return [...gifts.values()].filter((g) => !g.deletedAt);
+}
+
+/**
+ * Calculates aggregated platform-wide statistics for the landing page.
+ * Results are currently derived from the in-memory store; in production,
+ * these should be cached (e.g. in Redis) and refreshed periodically.
+ *
+ * @returns An object with total gifts sent and total NGN value gifted.
+ */
+export async function getPlatformStats(): Promise<{
+  totalGiftsSent: number;
+  totalValueNgn: number;
+}> {
+  const allGifts = await getAllGifts();
+  const successfulGifts = allGifts.filter((g) =>
+    ["funded", "locked", "unlocked", "claimed"].includes(g.status)
+  );
+
+  const totalGiftsSent = successfulGifts.length;
+  const totalValueNgn = successfulGifts.reduce((sum, g) => sum + g.amountNgn, 0);
+
+  return { totalGiftsSent, totalValueNgn };
+}
+
+/**
+ * Soft-deletes a gift by setting its `deletedAt` timestamp.
+ * The record is preserved for audit purposes and can be restored.
+ *
+ * @param id - The gift UUID.
+ * @returns The updated {@link Gift}, or `null` if not found.
+ */
+export async function softDeleteGift(id: string): Promise<Gift | null> {
+  const gift = gifts.get(id);
+  if (!gift) return null;
+  gift.deletedAt = new Date();
+  gift.updatedAt = new Date();
+  gifts.set(id, gift);
+  return gift;
+}
+
+/**
+ * Restores a soft-deleted gift by clearing its `deletedAt` timestamp.
+ *
+ * @param id - The gift UUID.
+ * @returns The restored {@link Gift}, or `null` if not found.
+ */
+export async function restoreGift(id: string): Promise<Gift | null> {
+  const gift = gifts.get(id);
+  if (!gift) return null;
+  gift.deletedAt = null;
+  gift.updatedAt = new Date();
+  gifts.set(id, gift);
+  return gift;
 }

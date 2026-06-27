@@ -19,11 +19,16 @@ export async function createGiftInvitation(
   const token = randomBytes(32).toString("hex");
   const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
 
-  await pool.query(
-    `INSERT INTO gift_invitations (id, gift_id, recipient_phone_hash, recipient_phone, token, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [invitationId, giftId, recipientPhoneHash, recipientPhone, token, expiresAt]
-  );
+  const sql = `INSERT INTO gift_invitations (id, gift_id, recipient_phone_hash, recipient_phone, token, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6)`;
+  await pool.query(sql, [
+    invitationId,
+    giftId,
+    recipientPhoneHash,
+    recipientPhone,
+    token,
+    expiresAt,
+  ]);
 
   return token;
 }
@@ -34,21 +39,17 @@ export async function createGiftInvitation(
  * @param token - The invitation token.
  * @returns The invitation details if valid, or null if invalid/expired.
  */
-export async function validateInvitationToken(
-  token: string
-): Promise<{
+export async function validateInvitationToken(token: string): Promise<{
   id: string;
   giftId: string;
   recipientPhoneHash: string;
   recipientPhone: string;
   expiresAt: Date;
 } | null> {
-  const { rows } = await pool.query(
-    `SELECT id, gift_id, recipient_phone_hash, recipient_phone, expires_at
+  const sql = `SELECT id, gift_id, recipient_phone_hash, recipient_phone, expires_at
      FROM gift_invitations
-     WHERE token = $1 AND status = 'pending' AND expires_at > NOW()`,
-    [token]
-  );
+     WHERE token = $1 AND status = 'pending' AND expires_at > NOW()`;
+  const { rows } = await pool.query(sql, [token]);
 
   if (rows.length === 0) return null;
 
@@ -69,10 +70,8 @@ export async function validateInvitationToken(
  * @returns True if updated successfully, false if not found.
  */
 export async function acceptInvitation(invitationId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `UPDATE gift_invitations SET status = 'accepted', updated_at = NOW() WHERE id = $1`,
-    [invitationId]
-  );
+  const sql = `UPDATE gift_invitations SET status = 'accepted', updated_at = NOW() WHERE id = $1`;
+  const { rowCount } = await pool.query(sql, [invitationId]);
   return (rowCount ?? 0) > 0;
 }
 
@@ -83,10 +82,8 @@ export async function acceptInvitation(invitationId: string): Promise<boolean> {
  * @returns True if updated successfully, false if not found.
  */
 export async function claimInvitation(invitationId: string): Promise<boolean> {
-  const { rowCount } = await pool.query(
-    `UPDATE gift_invitations SET status = 'claimed', updated_at = NOW() WHERE id = $1`,
-    [invitationId]
-  );
+  const sql = `UPDATE gift_invitations SET status = 'claimed', updated_at = NOW() WHERE id = $1`;
+  const { rowCount } = await pool.query(sql, [invitationId]);
   return (rowCount ?? 0) > 0;
 }
 
@@ -104,11 +101,9 @@ export async function getInvitationByPhoneAndGift(
   id: string;
   status: string;
 } | null> {
-  const { rows } = await pool.query(
-    `SELECT id, status FROM gift_invitations
-     WHERE recipient_phone = $1 AND gift_id = $2 AND expires_at > NOW()`,
-    [recipientPhone, giftId]
-  );
+  const sql = `SELECT id, status FROM gift_invitations
+     WHERE recipient_phone = $1 AND gift_id = $2 AND expires_at > NOW()`;
+  const { rows } = await pool.query(sql, [recipientPhone, giftId]);
 
   if (rows.length === 0) return null;
   return {

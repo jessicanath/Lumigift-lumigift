@@ -20,6 +20,11 @@ variable "private_subnet_ids" {
   type        = list(string)
 }
 
+variable "public_subnet_ids" {
+  description = "Public subnet IDs for the ALB"
+  type        = list(string)
+}
+
 variable "db_instance_class" {
   description = "RDS instance class"
   type        = string
@@ -45,5 +50,31 @@ variable "app_image" {
 
 variable "domain_name" {
   description = "Root domain name managed in Route 53 (e.g. lumigift.app)"
+  type        = string
+}
+
+variable "vpn_cidr_blocks" {
+  description = "CIDR blocks for VPN/bastion SSH access (e.g. [\"10.0.0.0/8\"])"
+  type        = list(string)
+}
+
+variable "private_subnet_cidrs" {
+  description = "CIDR ranges of private subnets — used to restrict bastion egress"
+  type        = list(string)
+}
+
+variable "backup_region" {
+  description = "Secondary AWS region for cross-region S3 backup replication (e.g. us-west-2)"
+  type        = string
+  default     = "us-west-2"
+}
+
+variable "ops_alert_email" {
+  description = "Email address for CloudWatch backup-failure alerts"
+  type        = string
+}
+
+variable "github_oidc_provider_arn" {
+  description = "ARN of the GitHub Actions OIDC provider"
   type        = string
 }

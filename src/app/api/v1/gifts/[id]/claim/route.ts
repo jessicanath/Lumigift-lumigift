@@ -1,15 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { Keypair } from "@stellar/stellar-sdk";
 import { authOptions } from "@/lib/auth";
-import pool from "@/lib/db";
+import { getRedisClient } from "@/lib/redis";
 import { getGiftById } from "@/server/services/gift.service";
 import { claimGift } from "@/server/services/claim.service";
-import { claimGiftSchema } from "@/types/schemas";
-import { withErrorHandler, withCsrf } from "@/server/middleware";
+import { claimGiftSchema } from "@/lib/schemas";
+import { withErrorHandler, withCsrf, validateRequest } from "@/server/middleware";
 import { getInvitationByPhoneAndGift, claimInvitation } from "@/server/services/invitation.service";
+import { logger } from "@/lib/logger";
 import type { ApiResponse } from "@/types";
 
-export const POST = withErrorHandler(withCsrf(async (req: NextRequest) => {
+/**
+ * Verify that the signature was produced by the owner of recipientStellarKey.
+ * Returns false if the nonce is unknown/expired OR the signature is invalid.
+ */
+async function verifyClaimSignature(
+  giftId: string,
+  nonce: string,
+  recipientStellarKey: string,
+  signatureHex: string
+): Promise<boolean> {
+  const redis = await getRedisClient();
+  const key = `claim:challenge:${giftId}:${nonce}`;
+
+  // Consume the nonce atomically — prevents replay attacks
+  const exists = await redis.get(key);
+  if (!exists) return false;
+  await redis.del(key);
+
+  try {
+    const keypair = Keypair.fromPublicKey(recipientStellarKey);
+    const nonceBytes = Buffer.from(nonce, "hex");
+    const sigBytes = Buffer.from(signatureHex, "hex");
+    return keypair.verify(nonceBytes, sigBytes);
+  } catch {
+    return false;
+  }
+}
+
+export const POST = withErrorHandler(withCsrf(async (req: NextRequest, context?: { params?: { id?: string } }) => {
   const session = await getServerSession(authOptions);
   if (!session?.user) {
     return NextResponse.json<ApiResponse<never>>(
@@ -18,17 +48,26 @@ export const POST = withErrorHandler(withCsrf(async (req: NextRequest) => {
     );
   }
 
-  const body = await req.json();
-  const parsed = claimGiftSchema.safeParse(body);
+  const body = await req.json().catch(() => ({}));
+  const validation = validateRequest(claimGiftSchema, body);
+  if (!validation.success) return validation.errorResponse;
 
-  if (!parsed.success) {
+  const { giftId, recipientStellarKey, nonce, signature } = validation.data;
+
+  // ── Verify Stellar keypair ownership ──────────────────────────────────────
+  const signatureValid = await verifyClaimSignature(giftId, nonce, recipientStellarKey, signature);
+  if (!signatureValid) {
+    logger.warn(
+      { event: "claim_invalid_signature", giftId, recipientStellarKey },
+      "Gift claim rejected: invalid or expired Stellar signature"
+    );
     return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: parsed.error.issues[0].message },
-      { status: 400 }
+      { success: false, error: "Invalid or expired signature. Please request a new challenge." },
+      { status: 401 }
     );
   }
 
-  const gift = await getGiftById(parsed.data.giftId);
+  const gift = await getGiftById(giftId);
   if (!gift) {
     return NextResponse.json<ApiResponse<never>>(
       { success: false, error: "Gift not found" },
@@ -36,29 +75,25 @@ export const POST = withErrorHandler(withCsrf(async (req: NextRequest) => {
     );
   }
 
-  // Get the recipient's phone from the session (they must be logged in)
   const phone = (session.user as { phone?: string }).phone;
-  
-  // Check if there's an invitation for this gift and recipient
+
   if (phone) {
-    const invitation = await getInvitationByPhoneAndGift(phone, parsed.data.giftId);
+    const invitation = await getInvitationByPhoneAndGift(phone, giftId);
     if (invitation) {
-      // Invitation exists for this gift and recipient
       if (invitation.status !== "accepted") {
         return NextResponse.json<ApiResponse<never>>(
           { success: false, error: "You must complete registration via the invitation to claim this gift" },
           { status: 403 }
         );
       }
-      // Mark invitation as claimed
       await claimInvitation(invitation.id);
     }
   }
 
-  const { txHash } = await claimGift(gift, parsed.data.recipientStellarKey);
+  const { jobId } = await claimGift(gift, recipientStellarKey);
 
-  return NextResponse.json<ApiResponse<{ txHash: string }>>({
+  return NextResponse.json<ApiResponse<{ jobId: string }>>({
     success: true,
-    data: { txHash },
+    data: { jobId },
   });
 }));

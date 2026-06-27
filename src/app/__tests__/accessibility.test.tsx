@@ -17,7 +17,6 @@ import React from "react";
 // @testing-library/react requires @testing-library/dom — skip gracefully if unavailable
 let render: typeof import("@testing-library/react").render;
 try {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   render = require("@testing-library/react").render;
 } catch {
   render = (() => ({ container: document.createElement("div") })) as never;
@@ -35,8 +34,14 @@ jest.mock("next/navigation", () => ({
 }));
 
 jest.mock("next/link", () => {
-  const Link = ({ href, children, ...rest }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...rest}>{children}</a>
+  const Link = ({
+    href,
+    children,
+    ...rest
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
+    <a href={href} {...rest}>
+      {children}
+    </a>
   );
   Link.displayName = "Link";
   return Link;
@@ -74,9 +79,7 @@ async function expectNoBlockingViolations(container: HTMLElement) {
   );
 
   if (blocking.length > 0) {
-    const summary = blocking
-      .map((v) => `[${v.impact}] ${v.id}: ${v.description}`)
-      .join("\n");
+    const summary = blocking.map((v) => `[${v.impact}] ${v.id}: ${v.description}`).join("\n");
     throw new Error(`Axe found ${blocking.length} critical/serious violation(s):\n${summary}`);
   }
 }
@@ -119,6 +122,7 @@ describe("Accessibility audits (axe-core)", () => {
       amountUsdc: "3.0000000",
       unlockAt: new Date(Date.now() - 1000),
       status: "unlocked" as const,
+      occasion: "general" as const,
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -136,14 +140,10 @@ describe("Accessibility audits (axe-core)", () => {
       runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"] },
     });
     const blocking = results.violations.filter(
-      (v) =>
-        (v.impact === "critical" || v.impact === "serious") &&
-        v.id !== "nested-interactive" // known pre-existing issue, see above
+      (v) => (v.impact === "critical" || v.impact === "serious") && v.id !== "nested-interactive" // known pre-existing issue, see above
     );
     if (blocking.length > 0) {
-      const summary = blocking
-        .map((v) => `[${v.impact}] ${v.id}: ${v.description}`)
-        .join("\n");
+      const summary = blocking.map((v) => `[${v.impact}] ${v.id}: ${v.description}`).join("\n");
       throw new Error(`Axe found ${blocking.length} critical/serious violation(s):\n${summary}`);
     }
   });
