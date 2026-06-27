@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { withErrorHandler, rateLimit } from "@/server/middleware";
+import { withErrorHandler, rateLimit, validateRequest } from "@/server/middleware";
 import { requireAdmin } from "@/server/middleware/admin";
 import { adminGetGift, logAdminAction } from "@/server/services/admin-gift.service";
+import { giftIdParamSchema } from "@/lib/schemas";
 import type { ApiResponse, Gift } from "@/types";
 
-export const GET = withErrorHandler(async (req: NextRequest, context: unknown) => {
+export const GET = withErrorHandler(async (req: NextRequest, { params }: { params: Promise<{ id: string }> }) => {
   const auth = await requireAdmin();
   if (auth instanceof NextResponse) return auth;
 
@@ -15,8 +16,12 @@ export const GET = withErrorHandler(async (req: NextRequest, context: unknown) =
     );
   }
 
-  const { params } = context as { params: { id: string } };
-  const gift = adminGetGift(params.id);
+  // ── Validate path param ──────────────────────────────────────────────────
+  const resolvedParams = await params;
+  const paramValidation = validateRequest(giftIdParamSchema, resolvedParams);
+  if (!paramValidation.success) return paramValidation.errorResponse;
+
+  const gift = adminGetGift(paramValidation.data.id);
 
   if (!gift) {
     return NextResponse.json<ApiResponse<never>>(

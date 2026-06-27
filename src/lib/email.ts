@@ -1,7 +1,15 @@
 import { Resend } from "resend";
 
-const resend = new Resend(process.env.RESEND_API_KEY);
 const FROM = process.env.RESEND_FROM_EMAIL ?? "Lumigift <gifts@lumigift.com>";
+
+function getResendClient(): Resend {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    throw new Error("RESEND_API_KEY is required to send email");
+  }
+
+  return new Resend(apiKey);
+}
 
 export interface GiftEmailData {
   recipientName: string;
@@ -42,10 +50,7 @@ function baseTemplate(title: string, body: string): string {
 </html>`;
 }
 
-export async function sendGiftReceivedEmail(
-  to: string,
-  data: GiftEmailData
-): Promise<void> {
+export async function sendGiftReceivedEmail(to: string, data: GiftEmailData): Promise<void> {
   const body = `
     <p>Hi ${data.recipientName},</p>
     <p>You've received a time-locked gift${data.senderName ? ` from <strong>${data.senderName}</strong>` : ""}! 🎉</p>
@@ -55,7 +60,7 @@ export async function sendGiftReceivedEmail(
     </div>
     <p>The gift amount and any personal message will be revealed when it unlocks. Stay tuned!</p>
   `;
-  await resend.emails.send({
+  await getResendClient().emails.send({
     from: FROM,
     to,
     subject: "🎁 You've received a Lumigift!",
@@ -63,10 +68,7 @@ export async function sendGiftReceivedEmail(
   });
 }
 
-export async function sendUnlockReminderEmail(
-  to: string,
-  data: GiftEmailData
-): Promise<void> {
+export async function sendUnlockReminderEmail(to: string, data: GiftEmailData): Promise<void> {
   const body = `
     <p>Hi ${data.recipientName},</p>
     <p>Great news — your Lumigift has just unlocked! 🔓</p>
@@ -75,7 +77,7 @@ export async function sendUnlockReminderEmail(
     <p>Log in to claim your gift now.</p>
     <a class="btn" href="${process.env.NEXT_PUBLIC_APP_URL ?? "https://lumigift.com"}/dashboard">Claim Your Gift</a>
   `;
-  await resend.emails.send({
+  await getResendClient().emails.send({
     from: FROM,
     to,
     subject: "🔓 Your Lumigift has unlocked!",
@@ -83,20 +85,40 @@ export async function sendUnlockReminderEmail(
   });
 }
 
-export async function sendClaimConfirmationEmail(
-  to: string,
-  data: GiftEmailData
-): Promise<void> {
+export async function sendClaimConfirmationEmail(to: string, data: GiftEmailData): Promise<void> {
   const body = `
     <p>Hi ${data.recipientName},</p>
     <p>Your Lumigift has been successfully claimed! ✅</p>
     ${data.amountNgn ? `<div class="highlight"><p class="label">Amount Claimed</p><p class="value">₦${data.amountNgn.toLocaleString("en-NG")}</p></div>` : ""}
     <p>The funds have been sent to your Stellar wallet. Thank you for using Lumigift!</p>
   `;
-  await resend.emails.send({
+  await getResendClient().emails.send({
     from: FROM,
     to,
     subject: "✅ Lumigift claimed successfully",
     html: baseTemplate("Lumigift claimed!", body),
+  });
+}
+
+export async function sendDeletionConfirmationEmail(
+  to: string,
+  data: { recipientName: string; requestId: string }
+): Promise<void> {
+  const body = `
+    <p>Hi ${data.recipientName},</p>
+    <p>Your data deletion request has been processed successfully. ✅</p>
+    <div class="highlight">
+      <p class="label">Request ID</p>
+      <p class="value" style="font-size:13px;font-family:monospace">${data.requestId}</p>
+    </div>
+    <p>Your personal data (phone number, name, device records, gift messages) has been deleted or anonymized.</p>
+    <p>Financial records are retained as required by Nigerian law (NDPR) and international regulations.</p>
+    <p>If you did not request this, please contact <a href="mailto:security@lumigift.com" style="color:#6c3bff">security@lumigift.com</a> immediately.</p>
+  `;
+  await getResendClient().emails.send({
+    from: FROM,
+    to,
+    subject: "✅ Your Lumigift data has been deleted",
+    html: baseTemplate("Data Deletion Confirmed", body),
   });
 }

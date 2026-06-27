@@ -5,6 +5,7 @@ import Script from "next/script";
 import "@/styles/globals.css";
 import "@/styles/components.css";
 import { Navbar } from "@/components/layout/Navbar";
+import { Footer } from "@/components/layout/Footer";
 import { Providers } from "./providers";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
@@ -39,7 +40,12 @@ export default async function RootLayout({ children }: { children: React.ReactNo
       <head>
         {/* Propagate the per-request nonce to Next.js Script components so
             their inline bootstrapping scripts satisfy the strict CSP. */}
-        <Script id="__nonce" nonce={nonce} strategy="beforeInteractive" dangerouslySetInnerHTML={{ __html: "" }} />
+        <Script
+          id="__nonce"
+          nonce={nonce}
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: "" }}
+        />
         {/* Prevent flash of wrong theme — runs before paint */}
         <script
           nonce={nonce}
@@ -52,6 +58,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <Providers>
           <Navbar />
           <main>{children}</main>
+          <Footer />
         </Providers>
       </body>
     </html>

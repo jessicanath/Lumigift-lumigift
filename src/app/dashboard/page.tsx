@@ -1,35 +1,70 @@
 "use client";
 
-import { useState } from "react";
+import { GiftCardSkeleton } from "@/components/gift/GiftCardSkeleton";
+import { OnboardingWrapper } from "@/components/onboarding/OnboardingWrapper";
+import { useState, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { GiftCard } from "@/components/gift/GiftCard";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import styles from "./page.module.css";
 import type { ApiResponse } from "@/types";
 import type { GiftPageOffset } from "@/server/services/gift.service";
 
 const DEFAULT_LIMIT = 10;
 
-async function fetchGifts(page: number, limit: number): Promise<GiftPageOffset> {
-  const res = await fetch(`/api/v1/gifts?page=${page}&limit=${limit}`);
+async function fetchGifts(page: number, limit: number, status?: string): Promise<GiftPageOffset> {
+  const query = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  if (status && status !== "all") {
+    query.set("status", status);
+  }
+  const res = await fetch(`/api/v1/gifts?${query.toString()}`);
   const json: ApiResponse<GiftPageOffset> = await res.json();
   if (!json.success) throw new Error(json.error);
   return json.data;
 }
 
 export default function DashboardPage() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+  const currentStatus = searchParams.get("status") || "all";
   const [page, setPage] = useState(1);
 
+  // Reset page when status changes
+  useEffect(() => {
+    setPage(1);
+  }, [currentStatus]);
+
   const { data, status } = useQuery({
-    queryKey: ["gifts", page],
-    queryFn: () => fetchGifts(page, DEFAULT_LIMIT),
+    queryKey: ["gifts", page, currentStatus],
+    queryFn: () => fetchGifts(page, DEFAULT_LIMIT, currentStatus),
   });
+
+  const handleStatusChange = (newStatus: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (newStatus === "all") {
+      params.delete("status");
+    } else {
+      params.set("status", newStatus);
+    }
+    router.push(`${pathname}?${params.toString()}`);
+  };
 
   if (status === "pending") {
     return (
       <div className={styles.page}>
         <div className="container">
-          <p>Loading gifts…</p>
+          <div className={styles.header}>
+            <h1 className={styles.title}>Your Gifts</h1>
+          </div>
+          <div className={styles.grid}>
+            <GiftCardSkeleton count={6} />
+          </div>
         </div>
       </div>
     );
@@ -45,12 +80,38 @@ export default function DashboardPage() {
     );
   }
 
-  const { data: gifts, total, totalPages } = data!;
+  const { data: gifts, total, totalPages, counts } = data!;
+
+  const tabs = [
+    { id: "all", label: "All", count: counts.all },
+    { id: "pending", label: "Pending", count: counts.pending },
+    { id: "claimed", label: "Claimed", count: counts.claimed },
+    { id: "expired", label: "Expired", count: counts.expired },
+  ];
 
   return (
     <div className={styles.page}>
+      <OnboardingWrapper />
       <div className="container">
-        <h1 className={styles.title}>Your Gifts</h1>
+        <div className={styles.header}>
+          <h1 className={styles.title}>Your Gifts</h1>
+          <Link href="/send" className="btn btn--primary btn--sm">
+            Send Gift
+          </Link>
+        </div>
+
+        <div className={styles.tabs}>
+          {tabs.map((tab) => (
+            <button
+              key={tab.id}
+              className={`${styles.tab} ${currentStatus === tab.id ? styles.tabActive : ""}`}
+              onClick={() => handleStatusChange(tab.id)}
+            >
+              {tab.label}
+              <span className={styles.badge}>{tab.count}</span>
+            </button>
+          ))}
+        </div>
 
         {gifts.length === 0 ? (
           <div className={styles.empty}>
@@ -83,11 +144,14 @@ export default function DashboardPage() {
         ) : (
           <>
             <p className={styles.count}>
-              Showing {(page - 1) * DEFAULT_LIMIT + 1}–{Math.min(page * DEFAULT_LIMIT, total)} of {total} gifts
+              Showing {(page - 1) * DEFAULT_LIMIT + 1}–{Math.min(page * DEFAULT_LIMIT, total)} of{" "}
+              {total} gifts
             </p>
             <div className={styles.grid}>
               {gifts.map((gift) => (
-                <GiftCard key={gift.id} gift={gift} perspective="sender" />
+                <ErrorBoundary key={gift.id} name={`GiftCard:${gift.id}`}>
+                  <GiftCard gift={gift} perspective="sender" />
+                </ErrorBoundary>
               ))}
             </div>
             <div className={styles.loadMore}>
@@ -98,7 +162,9 @@ export default function DashboardPage() {
               >
                 Previous
               </button>
-              <span>Page {page} of {totalPages}</span>
+              <span>
+                Page {page} of {totalPages}
+              </span>
               <button
                 className="btn btn--secondary"
                 onClick={() => setPage((p) => p + 1)}
@@ -113,3 +179,4 @@ export default function DashboardPage() {
     </div>
   );
 }
+// .

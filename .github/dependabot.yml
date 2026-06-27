@@ -4,15 +4,18 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
     open-pull-requests-limit: 10
     labels:
       - "dependencies"
       - "npm"
+      - "security"
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
     labels:
       - "dependencies"
       - "github-actions"
@@ -22,6 +25,9 @@ updates:
     directory: "/contracts/escrow"
     schedule:
       interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
     labels:
       - "dependencies"
       - "rust"
+      - "security"

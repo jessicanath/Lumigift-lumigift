@@ -1,26 +1,61 @@
 import { getRedisClient } from "@/lib/redis";
 import { serverConfig } from "@/server/config";
+import { serviceLogger } from "@/lib/logger";
+import pool from "@/lib/db";
+
+const logger = serviceLogger("exchange-rate");
 
 const CACHE_KEY = "rate:NGN:USDC";
-const CACHE_TTL_SEC = 60;
-const FALLBACK_RATE = 1600; // used only if Horizon is unreachable and no cache exists
+const CACHE_TTL_SEC = 300; // 5 minutes
+const STALE_TTL_SEC = 604800; // 1 week (for fallback)
+const FALLBACK_RATE = 1600; 
 const LOCKED_RATE_TTL_SEC = 300; // 5 minutes
-const MAX_SLIPPAGE_PERCENT = 1; // 1% max slippage tolerance
+const MAX_SLIPPAGE_PERCENT = 1;
 
 /** Shape returned by {@link getExchangeRate}. */
 export interface ExchangeRateResult {
   ngnPerUsdc: number;
   stale: boolean;
-  source: "cache" | "horizon" | "fallback";
+  source: "cache" | "horizon" | "database" | "fallback";
+  cachedAt?: number;
+}
+
+interface CachedRate {
+  rate: number;
+  timestamp: number;
+}
+
+async function saveRateToDb(rate: number, source: string): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO exchange_rates (rate, source) VALUES ($1, $2)`,
+      [rate, source]
+    );
+  } catch (err) {
+    logger.warn("Failed to save rate to DB", { err, rate, source });
+  }
+}
+
+async function getLastKnownRateFromDb(): Promise<{ rate: number; cachedAt: number } | null> {
+  try {
+    const result = await pool.query(
+      `SELECT rate, created_at FROM exchange_rates ORDER BY created_at DESC LIMIT 1`
+    );
+    if (result.rows.length > 0) {
+      return {
+        rate: parseFloat(result.rows[0].rate),
+        cachedAt: new Date(result.rows[0].created_at).getTime()
+      };
+    }
+  } catch (err) {
+    logger.warn("Failed to get last known rate from DB", { err });
+  }
+  return null;
 }
 
 /**
  * Fetches the NGN/USDC rate from the Stellar Horizon order book.
- * Returns the price of the first ask (XLM/USDC proxy — replace with a real
- * NGN/USDC feed such as Coingecko when available).
- *
- * @returns The exchange rate as a number.
- * @throws If Horizon returns a non-OK response or the order book has no asks.
+ * Returns the price of the first ask.
  */
 async function fetchFromHorizon(): Promise<number> {
   const url = `${serverConfig.stellar.horizonUrl}/order_book?selling_asset_type=native&buying_asset_type=credit_alphanum4&buying_asset_code=${serverConfig.usdc.assetCode}&buying_asset_issuer=${serverConfig.usdc.issuer}&limit=1`;
@@ -29,51 +64,64 @@ async function fetchFromHorizon(): Promise<number> {
   const data = await res.json();
   const price = parseFloat(data?.asks?.[0]?.price ?? "0");
   if (!price) throw new Error("No asks in Horizon order book");
-  // price is XLM/USDC; we need NGN/USDC — use XLM as proxy or return raw
-  // For now return the raw USDC price in XLM terms as a placeholder;
-  // replace with a real NGN/USDC feed (e.g. Coingecko) when available.
   return price;
 }
 
 /**
- * Returns the NGN/USDC exchange rate, using a Redis cache to avoid hammering
- * Horizon on every request.
- *
- * Resolution order:
- * 1. **Cache hit** — returns the cached rate (TTL: 60 s).
- * 2. **Horizon** — fetches a fresh rate, caches it, and returns it.
- * 3. **Stale cache** — if Horizon is unreachable, returns the last known rate
- *    marked as stale.
- * 4. **Fallback** — returns a hardcoded rate of 1 600 NGN/USDC as a last resort.
- *
- * @returns An {@link ExchangeRateResult} with the rate, staleness flag, and source.
+ * Refreshes the exchange rate in the background.
+ */
+async function refreshRate(): Promise<number> {
+  try {
+    const rate = await fetchFromHorizon();
+    const redis = await getRedisClient();
+    const data: CachedRate = { rate, timestamp: Date.now() };
+    await redis.set(CACHE_KEY, JSON.stringify(data), { EX: STALE_TTL_SEC });
+    await saveRateToDb(rate, "horizon");
+    logger.info("Refreshed and cached rate", { rate });
+    return rate;
+  } catch (err) {
+    logger.error("Background refresh failed", { err });
+    throw err;
+  }
+}
+
+/**
+ * Returns the NGN/USDC exchange rate, using a Redis cache with SWR.
  */
 export async function getExchangeRate(): Promise<ExchangeRateResult> {
   const redis = await getRedisClient();
 
-  // Cache hit
   const cached = await redis.get(CACHE_KEY);
   if (cached) {
-    console.log("[exchange-rate] cache hit", { key: CACHE_KEY });
-    return { ngnPerUsdc: parseFloat(cached), stale: false, source: "cache" };
+    try {
+      const { rate, timestamp }: CachedRate = JSON.parse(cached);
+      const ageSec = (Date.now() - timestamp) / 1000;
+
+      if (ageSec < CACHE_TTL_SEC) {
+        logger.debug("Cache hit (fresh)", { ageSec });
+        return { ngnPerUsdc: rate, stale: false, source: "cache", cachedAt: timestamp };
+      }
+
+      logger.debug("Cache hit (stale), refreshing in background", { ageSec });
+      refreshRate().catch(() => {}); // fire and forget
+      return { ngnPerUsdc: rate, stale: true, source: "cache", cachedAt: timestamp };
+    } catch (err) {
+      logger.error("Failed to parse cache", { err });
+    }
   }
 
-  console.log("[exchange-rate] cache miss", { key: CACHE_KEY });
-
+  logger.info("Cache miss, fetching synchronously");
   try {
-    const rate = await fetchFromHorizon();
-    await redis.setEx(CACHE_KEY, CACHE_TTL_SEC, String(rate));
-    console.log("[exchange-rate] fetched from Horizon", { rate });
-    return { ngnPerUsdc: rate, stale: false, source: "horizon" };
+    const rate = await refreshRate();
+    return { ngnPerUsdc: rate, stale: false, source: "horizon", cachedAt: Date.now() };
   } catch (err) {
-    console.error("[exchange-rate] Horizon unreachable, serving stale/fallback", err);
-
-    // Try stale value (key may have just expired — check with no TTL enforcement)
-    const stale = await redis.get(`${CACHE_KEY}:stale`);
-    if (stale) {
-      return { ngnPerUsdc: parseFloat(stale), stale: true, source: "cache" };
+    logger.warn("Horizon unreachable, checking DB for last known rate", { err });
+    const dbRate = await getLastKnownRateFromDb();
+    if (dbRate) {
+      logger.warn("Using fallback rate from DB", { rate: dbRate.rate, cachedAt: dbRate.cachedAt });
+      return { ngnPerUsdc: dbRate.rate, stale: true, source: "database", cachedAt: dbRate.cachedAt };
     }
-
+    logger.warn("No DB fallback, using hardcoded fallback rate", { rate: FALLBACK_RATE });
     return { ngnPerUsdc: FALLBACK_RATE, stale: true, source: "fallback" };
   }
 }
@@ -114,7 +162,7 @@ export async function validateSlippage(
 
   const lockedRate = parseFloat(lockedStr);
   const { ngnPerUsdc: currentRate } = await getExchangeRate();
-  const deviation = Math.abs(currentRate - lockedRate) / lockedRate * 100;
+  const deviation = (Math.abs(currentRate - lockedRate) / lockedRate) * 100;
 
   if (deviation > MAX_SLIPPAGE_PERCENT) {
     return {

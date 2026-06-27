@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processExpiries } from "@/server/services/scheduler.service";
+import { verifyCronAuth } from "@/lib/cron-auth";
 import type { ApiResponse } from "@/types";
 
 /**
@@ -8,13 +9,8 @@ import type { ApiResponse } from "@/types";
  * triggers a refund to the sender, and sends an SMS notification.
  */
 export const GET = async (req: NextRequest) => {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: "Unauthorized" },
-      { status: 401 }
-    );
-  }
+  const authErr = verifyCronAuth(req);
+  if (authErr) return authErr;
 
   await processExpiries();
   return NextResponse.json<ApiResponse<{ message: string }>>({

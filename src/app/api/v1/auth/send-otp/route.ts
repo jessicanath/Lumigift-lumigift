@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendOtp } from "@/lib/sms";
 import { storeOtp } from "@/lib/otp";
-import { withErrorHandler, withCsrf } from "@/server/middleware";
+import { withErrorHandler, withCsrf, validateRequest } from "@/server/middleware";
 import { getRedisClient } from "@/lib/redis";
-import { normalizePhone } from "@/lib/phone";
+import { sendOtpBodySchema } from "@/lib/schemas";
 import type { ApiResponse } from "@/types";
 
 // Uniform success message — never reveal whether the number is registered.
@@ -13,43 +13,60 @@ async function checkRateLimit(
   key: string,
   limit: number,
   windowSec: number
-): Promise<{ allowed: boolean; retryAfter: number }> {
+): Promise<{ allowed: boolean; limit: number; remaining: number; reset: number; retryAfter: number }> {
   const redis = await getRedisClient();
   const count = await redis.incr(key);
   if (count === 1) await redis.expire(key, windowSec);
   const ttl = await redis.ttl(key);
-  return { allowed: count <= limit, retryAfter: ttl };
+  return {
+    allowed: count <= limit,
+    limit,
+    remaining: Math.max(0, limit - count),
+    reset: Math.floor(Date.now() / 1000) + ttl,
+    retryAfter: ttl,
+  };
 }
 
 export const POST = withErrorHandler(withCsrf(async (req: NextRequest) => {
-  const body = await req.json();
-  const phone = normalizePhone(String(body?.phone ?? ""));
+  // ── Validate request body ────────────────────────────────────────────────
+  const body = await req.json().catch(() => ({}));
+  const validation = validateRequest(sendOtpBodySchema, body);
+  if (!validation.success) return validation.errorResponse;
 
-  if (!phone) {
-    return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: "Invalid phone number" },
-      { status: 400 }
-    );
-  }
+  const { phone } = validation.data;
 
   const ip =
     req.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? "unknown";
 
   // Per-phone: 3 requests per 10 minutes
   const phoneCheck = await checkRateLimit(`rl:otp:phone:${phone}`, 3, 600);
+  
+  // Per-IP secondary limit: 10 requests per minute
+  const ipCheck = await checkRateLimit(`rl:otp:ip:${ip}`, 10, 60);
+
+  const headers = {
+    "X-RateLimit-Limit": String(phoneCheck.limit),
+    "X-RateLimit-Remaining": String(phoneCheck.remaining),
+    "X-RateLimit-Reset": String(phoneCheck.reset),
+  };
+
   if (!phoneCheck.allowed) {
     return NextResponse.json<ApiResponse<never>>(
       { success: false, error: "Too many OTP requests for this number." },
-      { status: 429, headers: { "Retry-After": String(phoneCheck.retryAfter) } }
+      { 
+        status: 429, 
+        headers: { ...headers, "Retry-After": String(phoneCheck.retryAfter) } 
+      }
     );
   }
 
-  // Per-IP: 10 requests per hour
-  const ipCheck = await checkRateLimit(`rl:otp:ip:${ip}`, 10, 3600);
   if (!ipCheck.allowed) {
     return NextResponse.json<ApiResponse<never>>(
       { success: false, error: "Too many OTP requests from this IP." },
-      { status: 429, headers: { "Retry-After": String(ipCheck.retryAfter) } }
+      { 
+        status: 429, 
+        headers: { ...headers, "Retry-After": String(ipCheck.retryAfter) } 
+      }
     );
   }
 
@@ -61,8 +78,8 @@ export const POST = withErrorHandler(withCsrf(async (req: NextRequest) => {
   }
 
   // Always return the same body regardless of whether the number is registered.
-  return NextResponse.json<ApiResponse<{ message: string }>>({
-    success: true,
-    data: OTP_RESPONSE,
-  });
+  return NextResponse.json<ApiResponse<{ message: string }>>(
+    { success: true, data: OTP_RESPONSE },
+    { headers }
+  );
 }));

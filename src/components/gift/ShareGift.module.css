@@ -23,3 +23,8 @@
   outline: 2px solid var(--color-brand-primary);
   outline-offset: 2px;
 }
+
+.copyButton {
+  min-width: 90px;
+  justify-content: center;
+}

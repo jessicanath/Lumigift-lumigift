@@ -29,3 +29,19 @@
   color: var(--color-error);
   margin: 0;
 }
+
+/* ─── Mobile Responsiveness ───────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .stepTitle {
+    font-size: var(--text-xl);
+  }
+
+  .nav {
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .nav button {
+    width: 100%;
+  }
+}

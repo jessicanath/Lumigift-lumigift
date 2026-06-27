@@ -236,11 +236,31 @@ Changes are grouped under these categories:
 5. Fill in the PR template
 6. Request a review — PRs require at least one approval
 
+### PR Title Format (required for changelog)
+
+**PR titles must follow the conventional commit format** so that `release-please` can automatically categorise changes in `CHANGELOG.md`:
+
+```
+<type>(<optional scope>): <short description>
+```
+
+| Type | Changelog section | Example PR title |
+|------|-------------------|-----------------|
+| `feat` | Features | `feat(gift): add recurring gift scheduling` |
+| `fix` | Bug Fixes | `fix(auth): handle expired OTP gracefully` |
+| `perf` | Performance | `perf(db): add index on gifts.sender_id` |
+| `revert` | Bug Fixes | `revert: revert feat(api): paginated gifts` |
+| `feat!` or body `BREAKING CHANGE:` | Breaking Changes | `feat(api)!: remove deprecated /api/admin routes` |
+
+PRs with types `docs`, `style`, `refactor`, `test`, `chore`, or `ci` are excluded from the changelog automatically.
+
+> A PR title that does not match this format will be flagged by the `pr-checks` workflow and must be corrected before merge.
+
 ---
 
 ## Branch Protection Rules
 
-Both `main` and `develop` are protected branches. The rules below are enforced via GitHub repository settings and cannot be bypassed by any contributor, including maintainers.
+Both `main` and `develop` are protected branches. The rules below are enforced via GitHub repository settings and cannot be bypassed by any contributor, including maintainers and administrators.
 
 ### `main`
 
@@ -253,6 +273,7 @@ Both `main` and `develop` are protected branches. The rules below are enforced v
 | Direct pushes                     | ❌ Disabled                                                               |
 | Force pushes                      | ❌ Disabled                                                               |
 | Branch deletion                   | ❌ Disabled                                                               |
+| Enforce for administrators        | ✅ Enabled — admins are not exempt                                        |
 
 ### `develop`
 
@@ -264,6 +285,7 @@ Both `main` and `develop` are protected branches. The rules below are enforced v
 | Direct pushes                     | ❌ Disabled                                                               |
 | Force pushes                      | ❌ Disabled                                                               |
 | Branch deletion                   | ✅ Allowed                                                                |
+| Enforce for administrators        | ✅ Enabled — admins are not exempt                                        |
 
 ### Why these rules?
 
@@ -272,6 +294,7 @@ Both `main` and `develop` are protected branches. The rules below are enforced v
 - **1 approval on `main`** — production code gets a second pair of eyes before it ships.
 - **Force-push disabled** — prevents rewriting shared history and breaking other contributors' local branches.
 - **Deletion disabled on `main`** — the production branch cannot be accidentally removed.
+- **Admin enforcement** — the "Include administrators" option is enabled on both branches so repository admins cannot bypass CI or code-review requirements.
 
 ---
 
