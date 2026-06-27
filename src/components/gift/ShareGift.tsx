@@ -27,6 +27,30 @@ export function ShareGift({ giftId, recipientName }: ShareGiftProps) {
   const claimUrl = buildClaimUrl(giftId);
   const text = buildShareText(recipientName, claimUrl);
 
+  const handleCopy = async () => {
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard) {
+        await navigator.clipboard.writeText(claimUrl);
+      } else {
+        // Fallback for older browsers or insecure contexts
+        const textArea = document.createElement("textarea");
+        textArea.value = claimUrl;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        textArea.style.top = "0";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error("Failed to copy link:", err);
+    }
+  };
+
   const handleShare = async () => {
     // Web Share API — primary on supported browsers
     if (typeof navigator !== "undefined" && navigator.share) {
@@ -37,10 +61,8 @@ export function ShareGift({ giftId, recipientName }: ShareGiftProps) {
         // user cancelled or API unavailable — fall through
       }
     }
-    // Fallback: copy to clipboard
-    await navigator.clipboard.writeText(claimUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2500);
+    // Fallback: use the same copy logic
+    handleCopy();
   };
 
   const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
@@ -51,10 +73,20 @@ export function ShareGift({ giftId, recipientName }: ShareGiftProps) {
       <Button
         variant="secondary"
         size="sm"
+        onClick={handleCopy}
+        aria-label="Copy gift claim link"
+        className={styles.copyButton}
+      >
+        {copied ? "✓ Copied!" : "Copy Link"}
+      </Button>
+
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={handleShare}
         aria-label="Share gift link"
       >
-        {copied ? "✓ Copied!" : "Share"}
+        Share
       </Button>
 
       <a

@@ -152,14 +152,13 @@ describe("createGift", () => {
       amountUsdc: "624.375",
       unlockAt: new Date(Date.now() + 86_400_000),
       status: "pending_payment",
+      occasion: "general",
       createdAt: new Date(), // today
       updatedAt: new Date(),
     } as Gift);
 
     // ₦999,000 + ₦5,000 = ₦1,004,000 > ₦1,000,000 daily limit
-    await expect(createGift(SENDER_ID, baseInput)).rejects.toThrow(
-      /daily sending limit/i
-    );
+    await expect(createGift(SENDER_ID, baseInput)).rejects.toThrow(/daily sending limit/i);
   });
 
   it("does not count yesterday's gifts toward today's daily limit", async () => {
@@ -175,6 +174,7 @@ describe("createGift", () => {
       amountUsdc: "624.375",
       unlockAt: new Date(Date.now() + 86_400_000),
       status: "pending_payment",
+      occasion: "general",
       createdAt: yesterday,
       updatedAt: yesterday,
     } as Gift);
@@ -264,10 +264,7 @@ describe("updateGiftStatus", () => {
   });
 
   it("returns null for a non-existent gift id", async () => {
-    const result = await updateGiftStatus(
-      "00000000-0000-0000-0000-000000000000",
-      "funded"
-    );
+    const result = await updateGiftStatus("00000000-0000-0000-0000-000000000000", "funded");
     expect(result).toBeNull();
   });
 

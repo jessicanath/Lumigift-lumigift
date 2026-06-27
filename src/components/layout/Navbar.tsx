@@ -2,7 +2,9 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { ThemeToggle } from "@/components/ui/ThemeToggle";
+import { NotificationCenter } from "./NotificationCenter";
 import styles from "./Navbar.module.css";
 
 const NAV_LINKS = [
@@ -12,6 +14,7 @@ const NAV_LINKS = [
 
 export function Navbar() {
   const pathname = usePathname();
+  const { data: session } = useSession();
 
   return (
     <header className={styles.header}>
@@ -39,6 +42,11 @@ export function Navbar() {
           <li>
             <ThemeToggle />
           </li>
+          {session?.user && (
+            <li>
+              <NotificationCenter />
+            </li>
+          )}
           <li>
             <Link href="/auth/login" className="btn btn--primary btn--sm">
               Sign In

@@ -27,3 +27,4 @@ export function GiftStatusBadge({ status }: { status: GiftStatus }) {
     </span>
   );
 }
+// .

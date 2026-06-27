@@ -33,3 +33,30 @@ export function stripHtmlTags(input: string | undefined): string | undefined {
     .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
     .replace(/<[^>]*>/g, "");
 }
+
+/**
+ * Recursively sanitizes an object or array.
+ * Trims whitespace, normalizes Unicode to NFC, and strips HTML tags from all string fields.
+ */
+export function sanitizeObject<T>(input: T): T {
+  if (input === null || input === undefined) return input;
+
+  if (typeof input === "string") {
+    return stripHtmlTags(input.trim().normalize("NFC")) as unknown as T;
+  }
+
+  if (Array.isArray(input)) {
+    return input.map((item) => sanitizeObject(item)) as unknown as T;
+  }
+
+  if (typeof input === "object") {
+    const sanitized: Record<string, any> = {};
+    for (const [key, value] of Object.entries(input)) {
+      sanitized[key] = sanitizeObject(value);
+    }
+    return sanitized as unknown as T;
+  }
+
+  return input;
+}
+

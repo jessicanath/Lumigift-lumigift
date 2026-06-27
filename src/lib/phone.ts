@@ -1,3 +1,52 @@
+import { createHash } from "crypto";
+import type { PoolClient } from "pg";
+
+/**
+ * Returns the SHA-256 hex digest of an E.164 phone number.
+ * Must match the hash stored in migrations/0003_hash_recipient_phone.sql.
+ */
+export function hashPhone(phone: string): string {
+  return createHash("sha256").update(phone).digest("hex");
+}
+
+/**
+ * Detects hash collisions before gift creation.
+ *
+ * A collision is defined as the same SHA-256 hash appearing for more than
+ * one distinct normalized phone number in the users table.  Because SHA-256
+ * collisions are cryptographically infeasible in practice, any such finding
+ * indicates a data-integrity or normalization bug and must be reviewed
+ * manually before the gift is accepted.
+ *
+ * @param phoneHash - The SHA-256 hex digest of the recipient's E.164 number.
+ * @param db        - An active pg PoolClient (or Pool).
+ * @returns `true` when the hash resolves to exactly one user (safe to proceed),
+ *          `false` when zero users are found (unregistered recipient — caller
+ *          decides whether to allow or block), and throws when multiple users
+ *          share the hash (collision — gift must be rejected).
+ */
+export async function detectPhoneHashCollision(
+  phoneHash: string,
+  db: Pick<PoolClient, "query">
+): Promise<boolean> {
+  const result = await db.query<{ count: string }>(
+    `SELECT COUNT(DISTINCT id) AS count FROM users WHERE phone_hash = $1`,
+    [phoneHash]
+  );
+
+  const count = parseInt(result.rows[0]?.count ?? "0", 10);
+
+  if (count > 1) {
+    // Collision: multiple users map to the same hash — reject and escalate.
+    throw new Error(
+      `PHONE_HASH_COLLISION: hash ${phoneHash.slice(0, 8)}… maps to ${count} users. ` +
+        "Gift rejected pending manual review."
+    );
+  }
+
+  return count === 1;
+}
+
 /**
  * Normalizes a phone number to E.164 format.
  * Supports Nigerian numbers in the following formats:

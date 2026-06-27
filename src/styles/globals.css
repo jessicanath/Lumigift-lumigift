@@ -98,6 +98,29 @@ body {
   overflow-x: hidden;
 }
 
+/* ─── Page Transitions ───────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-transition {
+  animation: fadeIn var(--transition-base) ease-out forwards;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-transition {
+    animation: none;
+  }
+}
+
 @media (max-width: 768px) {
   .container {
     padding-inline: var(--space-4);

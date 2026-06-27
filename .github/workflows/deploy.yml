@@ -5,6 +5,10 @@ on:
     branches: [main]
     tags: ["v*"]
 
+permissions:
+  contents: read
+  id-token: write # Required for OIDC connection to AWS
+
 jobs:
   deploy:
     name: Deploy
@@ -13,6 +17,31 @@ jobs:
     steps:
       - uses: actions/checkout@v6.0.2
 
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: lumigift-prod
+          IMAGE_TAG: ${{ github.sha }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+          APP_ENV: production
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
       - uses: actions/setup-node@v6
         with:
           node-version: 20
@@ -20,44 +49,56 @@ jobs:
 
       - run: npm ci
 
-      - name: Build
-        run: npm run build
+      - name: Run database migrations
+        id: migrate
+        run: |
+          npm run db:migrate 2>&1 | tee migration.log
+          echo "exit_code=${PIPESTATUS[0]}" >> $GITHUB_OUTPUT
         env:
-          NEXT_PUBLIC_APP_URL: ${{ vars.NEXT_PUBLIC_APP_URL }}
-          NEXT_PUBLIC_APP_NAME: Lumigift
-          NEXTAUTH_URL: ${{ vars.NEXTAUTH_URL }}
-          NEXTAUTH_SECRET: ${{ secrets.NEXTAUTH_SECRET }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          STELLAR_NETWORK: mainnet
-          STELLAR_HORIZON_URL: https://horizon.stellar.org
-          STELLAR_NETWORK_PASSPHRASE: "Public Global Stellar Network ; September 2015"
-          STELLAR_ESCROW_CONTRACT_ID: ${{ secrets.STELLAR_ESCROW_CONTRACT_ID }}
-          STELLAR_SERVER_SECRET_KEY: ${{ secrets.STELLAR_SERVER_SECRET_KEY }}
-          USDC_ISSUER: ${{ vars.USDC_ISSUER }}
-          USDC_ASSET_CODE: USDC
-          PAYSTACK_SECRET_KEY: ${{ secrets.PAYSTACK_SECRET_KEY }}
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-          TERMII_API_KEY: ${{ secrets.TERMII_API_KEY }}
-          REDIS_URL: ${{ secrets.REDIS_URL }}
-          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          NEXT_PUBLIC_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
 
-      - name: Upload source maps to Sentry
-        run: npx @sentry/cli@2 releases files "${{ github.sha }}" upload-sourcemaps .next --url-prefix "~/_next" --rewrite
-        env:
-          SENTRY_ORG: ${{ vars.SENTRY_ORG }}
-          SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT }}
-          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
-
-      # Swap this step for your hosting provider (Vercel, Railway, Fly.io, etc.)
-      - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v42
+      - name: Upload migration logs
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: "--prod"
+          name: migration-logs-${{ github.sha }}
+          path: migration.log
+          retention-days: 30
+
+      - name: Abort on migration failure
+        if: steps.migrate.outputs.exit_code != '0'
+        run: |
+          echo "::error::Database migration failed — aborting deployment. Check migration-logs artifact."
+          exit 1
+
+      - name: Fill in the new image ID in the Amazon ECS task definition
+        id: task-def
+        run: |
+          sed -i 's|<AWS_ACCOUNT_ID>|${{ secrets.AWS_ACCOUNT_ID }}|g' taskdef.json
+          sed -i 's|<AWS_REGION>|${{ vars.AWS_REGION }}|g' taskdef.json
+
+      - name: Render Amazon ECS task definition
+        id: render-app-container
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: taskdef.json
+          container-name: app
+          image: ${{ steps.build-image.outputs.image }}
+
+      - name: Deploy to Amazon ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-app-container.outputs.task-definition }}
+          service: lumigift-prod
+          cluster: lumigift-prod
+          codedeploy-appspec: appspec.yaml
+          codedeploy-application: lumigift-prod
+          codedeploy-deployment-group: lumigift-prod
+          wait-for-service-stability: true
+
+      - name: Run smoke tests against production
+        id: smoke
+        run: npm run e2e -- --grep "@smoke"
+        env:
+          PLAYWRIGHT_BASE_URL: ${{ vars.NEXT_PUBLIC_APP_URL }}
+          CI: true
