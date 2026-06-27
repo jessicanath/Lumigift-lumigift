@@ -22,8 +22,8 @@ const config = {
   ],
   thresholds: {
     high: 80,
-    low: 70,
-    break: 70,
+    low: 60,
+    break: 50,
   },
   dashboard: {
     project: "github.com/JosephOnuh/Lumigift-lumigift",

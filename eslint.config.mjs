@@ -1,14 +1,9 @@
-import { dirname } from "path";
-import { fileURLToPath } from "url";
-import { FlatCompat } from "@eslint/eslintrc";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const compat = new FlatCompat({ baseDirectory: __dirname });
+import nextConfig from "eslint-config-next/core-web-vitals";
+import prettierConfig from "eslint-config-prettier";
 
 const config = [
-  ...compat.extends("next/core-web-vitals", "prettier"),
+  ...nextConfig,
+  prettierConfig,
   {
     rules: {
       "no-console": ["warn", { allow: ["warn", "error"] }],
@@ -21,8 +16,7 @@ const config = [
             "Use parameterized queries (pool.query(sql, [params])) instead of tagged template SQL literals to prevent SQL injection.",
         },
         {
-          selector:
-            "CallExpression[callee.property.name='query'] > TemplateLiteral:first-child",
+          selector: "CallExpression[callee.property.name='query'] > TemplateLiteral:first-child",
           message:
             "Avoid template literals as the first argument to pool.query(). Use a plain string with $1/$2 placeholders and a params array to prevent SQL injection.",
         },

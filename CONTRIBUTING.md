@@ -236,6 +236,26 @@ Changes are grouped under these categories:
 5. Fill in the PR template
 6. Request a review — PRs require at least one approval
 
+### PR Title Format (required for changelog)
+
+**PR titles must follow the conventional commit format** so that `release-please` can automatically categorise changes in `CHANGELOG.md`:
+
+```
+<type>(<optional scope>): <short description>
+```
+
+| Type | Changelog section | Example PR title |
+|------|-------------------|-----------------|
+| `feat` | Features | `feat(gift): add recurring gift scheduling` |
+| `fix` | Bug Fixes | `fix(auth): handle expired OTP gracefully` |
+| `perf` | Performance | `perf(db): add index on gifts.sender_id` |
+| `revert` | Bug Fixes | `revert: revert feat(api): paginated gifts` |
+| `feat!` or body `BREAKING CHANGE:` | Breaking Changes | `feat(api)!: remove deprecated /api/admin routes` |
+
+PRs with types `docs`, `style`, `refactor`, `test`, `chore`, or `ci` are excluded from the changelog automatically.
+
+> A PR title that does not match this format will be flagged by the `pr-checks` workflow and must be corrected before merge.
+
 ---
 
 ## Branch Protection Rules

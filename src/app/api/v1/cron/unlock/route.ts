@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { processUnlocks } from "@/server/services/scheduler.service";
+import { verifyCronAuth } from "@/lib/cron-auth";
 import type { ApiResponse } from "@/types";
 
 /** Ping a dead-man's-switch URL (e.g. Healthchecks.io / BetterUptime). */
@@ -15,13 +16,8 @@ async function pingHealthcheck(suffix = "") {
 
 /** Called by Vercel Cron or an external scheduler every minute. */
 export const GET = async (req: NextRequest) => {
-  const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-    return NextResponse.json<ApiResponse<never>>(
-      { success: false, error: "Unauthorized" },
-      { status: 401 }
-    );
-  }
+  const authErr = verifyCronAuth(req);
+  if (authErr) return authErr;
 
   const startedAt = new Date();
   console.log("[cron] unlock run started", { startedAt });

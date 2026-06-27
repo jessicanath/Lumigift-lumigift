@@ -1,30 +1,27 @@
 name: Mutation Testing
-
 on:
   schedule:
-    # Every Monday at 02:00 UTC
-    - cron: "0 2 * * 1"
+    - cron: '0 2 * * 1'
   workflow_dispatch:
-
 jobs:
   mutation-test:
     name: Stryker Mutation Testing
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6.0.2
-
       - uses: actions/setup-node@v6
         with:
           node-version: 20
           cache: npm
-
       - run: npm ci
-
       - name: Run Stryker
+        # Stryker exits with a non-zero code when the mutation score drops below
+        # the configured `break` threshold (currently 50). This causes the CI job
+        # to fail automatically — no extra flags are needed.
+        continue-on-error: false
         run: npx stryker run
         env:
           STRYKER_DASHBOARD_API_KEY: ${{ secrets.STRYKER_DASHBOARD_API_KEY }}
-
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@v7.0.1

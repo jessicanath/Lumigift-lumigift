@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { loadSecretManagerEnv } from "./secrets";
+
+if (process.env.NODE_ENV === "production" && process.env.NEXT_PHASE !== "phase-production-build") {
+  await loadSecretManagerEnv();
+}
 
 const envSchema = z.object({
   // App
@@ -46,8 +51,16 @@ const envSchema = z.object({
   // Cron
   CRON_SECRET: z.string().min(32),
 
+  // CORS
+  CORS_ALLOWED_ORIGINS: z.string().default("http://localhost:3000"),
+
   // Redis
   REDIS_URL: z.string().min(1),
+  REDIS_USE_SENTINEL: z.preprocess((val) => val === "true" || val === "1", z.boolean()).default(false),
+  REDIS_SENTINEL_HOSTS: z.string().optional(), // Format: host1:port1,host2:port2
+  REDIS_SENTINEL_NAME: z.string().default("mymaster"),
+  REDIS_SENTINEL_PASSWORD: z.string().optional(),
+  REDIS_PASSWORD: z.string().optional(),
 
   // Gift Limits
   GIFT_MIN_AMOUNT_NGN: z.coerce.number().int().positive().default(500),
@@ -94,13 +107,18 @@ export function validateEnv(): Env {
       errorMessage += `\n\nInvalid variables:\n${invalidVars.map((v) => `  - ${v}`).join("\n")}`;
     }
 
-    errorMessage += "\n\nPlease check your .env file and ensure all required variables are set correctly.";
+    errorMessage +=
+      "\n\nPlease check your .env file and ensure all required variables are set correctly.";
 
     console.error(errorMessage);
+
     // During build (NEXT_PHASE=phase-production-build) or non-production,
     // return a stub so module-level imports don't crash.
     // At runtime with missing vars the app will fail fast on first request.
-    if (process.env.NEXT_PHASE === "phase-production-build" || process.env.NODE_ENV !== "production") {
+    if (
+      process.env.NEXT_PHASE === "phase-production-build" ||
+      process.env.NODE_ENV !== "production"
+    ) {
       // Return a stub with empty strings so destructuring doesn't throw
       return new Proxy({} as Env, { get: () => "" });
     }

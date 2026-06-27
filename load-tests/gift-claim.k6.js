@@ -43,8 +43,7 @@ export const options = {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const BASE_URL = __ENV.BASE_URL || "http://localhost:3000";
-const STELLAR_KEY =
-  __ENV.STELLAR_KEY || "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
+const STELLAR_KEY = __ENV.STELLAR_KEY || "GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
 // Pre-seeded gift IDs — each VU picks one round-robin
 const GIFT_IDS = (__ENV.GIFT_IDS || "").split(",").filter(Boolean);
@@ -69,11 +68,7 @@ export default function () {
     tags: { name: "POST /api/v1/gifts/:id/claim" },
   };
 
-  const res = http.post(
-    `${BASE_URL}/api/v1/gifts/${giftId}/claim`,
-    payload,
-    params
-  );
+  const res = http.post(`${BASE_URL}/api/v1/gifts/${giftId}/claim`, payload, params);
 
   claimDuration.add(res.timings.duration);
 

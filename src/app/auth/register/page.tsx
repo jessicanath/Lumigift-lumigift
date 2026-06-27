@@ -22,7 +22,8 @@ export default function RegisterPage() {
 
   const { csrfFetch } = useCsrf();
   const errorId = useId();
-  const statusId = useId();
+  // eslint-disable-next-line no-unused-vars
+  const _statusId = useId();
 
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,8 +121,7 @@ export default function RegisterPage() {
           </form>
 
           <p className={styles.footer}>
-            Already have an account?{" "}
-            <a href="/auth/login">Sign in instead</a>
+            Already have an account? <a href="/auth/login">Sign in instead</a>
           </p>
         </div>
       </div>
